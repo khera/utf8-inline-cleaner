@@ -1,11 +1,37 @@
 # Transcode Table Data into UTF-8
 
-Update data inline in tables that have non-ASCII which can not be
+Update data inline in tables that have non-ASCII data which can not be
 interpreted as already being UTF-8.
 
 **ALWAYS** run this first on a copy of your data, and validate it does
 what you think it will do. Do not experiment with your production
 database. Also **ALWAYS** back up your production data.
+
+The strategy is to search the table for any text-based columns (char,
+varchar, text, JSON, etc.) which contain non-ASCII bytes. Those rows
+are selected "FOR UPDATE" to prevent any changes while we inspect them
+further. Next, each column is run through the
+Encoding::FixLatin::fix_latin function. If the result is different
+than what we started with, the new value is updated for that column.
+
+## Assumptions
+
+This program is written to use with PostgreSQL (tested with
+version 9.4). It should be able to be modified to work with other
+databases by changing the code relating to the **ctid** column.  We
+use it instead of trying to deal with multi-part primary keys to
+identify the row for the UPDATE. It is also faster than any primary
+key for the update since it is a physical location into the table
+file.
+
+The other major assumption is that the database is using the SQL_ASCII
+encoding (i.e., no encoding). If your table is any other encoding,
+all bets are off.
+
+The fix_latin function is pretty good at guessing what character set
+was intended, but it is still just guessing. It will get it wrong for
+some data.
+
 
 ## Installing
 
@@ -22,13 +48,17 @@ the following Perl modules to be installed:
 Specify the name of the table to scan and fix. With the `--dryrun`
 flag, there will be no UPDATEs issued, but any specified triggers will
 still be disabled, resulting in table locks. For dry run, the user
-specified only needs SELECT privilegs so does not necessarily need to
+specified only needs SELECT privileges so does not necessarily need to
 be the superuser.
+
+All of the rows with invalid data will be updated and committed within
+one transaction, so other updates to those rows will be blocked until
+completion. Rows containing only ASCII data will not be locked.
 
 Example:
 
 ```
-./utf8-inline-cleaner --dryrun --db ${DB} --dbuser postgres --table templates --disable trig_templates_log_update
+./utf8-inline-cleaner --dryrun --db utf8test --dbuser postgres --table templates --disable trig_templates_log_update
 ```
 
 ### Command Line Flags
@@ -70,7 +100,10 @@ Names the table being cleaned in the schema (required).
 #### disable TRIGGER
 
 Disables the named trigger during the fixup step. Specify multiple
-times for multiple triggers.
+times for multiple triggers. If your trigger does not have side
+effects from the updates that are about to be issued, do not bother
+disabling them. When triggers are disabled, the whole table is locked
+so there can be no concurrency.
 
 # Sponsor
 
