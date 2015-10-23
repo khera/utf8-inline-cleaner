@@ -14,6 +14,10 @@ further. Next, each column is run through the
 Encoding::FixLatin::fix_latin function. If the result is different
 than what we started with, the new value is updated for that column.
 
+The goal is to end up with data that is all UTF-8 clean, and can then
+be loaded into a database created with the `UTF8` encoding in
+PostgreSQL either via dump/reload or some other replication strategy.
+
 ## Assumptions
 
 This program is written to use with PostgreSQL (tested with
@@ -24,8 +28,8 @@ identify the row for the UPDATE. It is also faster than any primary
 key for the update since it is a physical location into the table
 file.
 
-The other major assumption is that the database is using the SQL_ASCII
-encoding (i.e., no encoding). If your table is any other encoding,
+The other major assumption is that the database is using the `SQL_ASCII`
+encoding (*i.e.*, no encoding). If your database is any other encoding,
 all bets are off.
 
 The fix_latin function is pretty good at guessing what character set
