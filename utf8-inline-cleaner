@@ -2,7 +2,7 @@
 use strict;
 use 5.16.0;
 
-# Time-stamp: "23 October 2015, 14:19:32 (vivek@vk-dev.int.kcilink.com)"
+# Time-stamp: "23 October 2015, 15:57:27 (vivek@vk-dev.int.kcilink.com)"
 
 # scan a table for non-UTF8 data and scrub it into clean UTF8. Ignores
 # columns that are incapable of holding non-UTF8 data such as
@@ -122,6 +122,9 @@ $sth->execute() or die $dbh->errstr;
 my $left_in_batch = $sth->rows();
 INFO "batch has $left_in_batch rows";
 
+
+my $fixed_rows = 0;
+my $examined_rows = 0;
 while (my $row = $sth->fetchrow_hashref()) {
   my @update_cols;
   my @update_vals;
@@ -129,6 +132,7 @@ while (my $row = $sth->fetchrow_hashref()) {
 
   # check to see which columns need upgrading to utf8
   DEBUG "Examining row @primary_keys = $row_key";
+  $examined_rows++;
   foreach my $colname (@fixcols) {
     next unless defined $row->{$colname}; # skip NULLs
     my $fixed = fix_latin($row->{$colname}, bytes_only => 1);
@@ -140,11 +144,14 @@ while (my $row = $sth->fetchrow_hashref()) {
   }
 
   # do the update if we're not in a dry run test.
-  if (!$dryrun && scalar(@update_cols) > 0) {
-    local($") = ',';
-    my $query = "UPDATE ${schema}.${table} SET @update_cols WHERE ctid=?";
-    push @update_vals, $row->{ctid};
-    $dbh->do($query,undef,@update_vals) or die $dbh->errstr;
+  if (scalar(@update_cols) > 0) {
+    $fixed_rows++;
+    if (!$dryrun) {
+      local($") = ',';
+      my $query = "UPDATE ${schema}.${table} SET @update_cols WHERE ctid=?";
+      push @update_vals, $row->{ctid};
+      $dbh->do($query,undef,@update_vals) or die $dbh->errstr;
+    }
   }
 
   # if we processed all the rows in this batch, get the next batch
@@ -166,7 +173,7 @@ foreach my $trigger_name (@disable_triggers) {
 }
 
 $dbh->commit() or die "commit failed:".$dbh->errstr;
-LOGEXIT "Done";
+LOGEXIT "Done. $examined_rows rows were examined and $fixed_rows rows were corrected.";
 
 
 # return true if this type is a text type we need to fix UTF8
