@@ -2,7 +2,7 @@
 use strict;
 use 5.16.0;
 
-# Time-stamp: "23 October 2015, 16:26:32 (vivek@vk-dev.int.kcilink.com)"
+# Time-stamp: "23 October 2015, 17:37:43 (vivek@vk-dev.int.kcilink.com)"
 
 # scan a table for non-UTF8 data and scrub it into clean UTF8. Ignores
 # columns that are incapable of holding non-UTF8 data such as
@@ -69,7 +69,7 @@ DEBUG "user=$dbuser db=${hostname}:${database} schema=$schema table=$table disab
 
 # connect to the database
 my $dbh = DBI->connect("dbi:Pg:dbname=${database};host=${hostname}", $dbuser,
-                       undef,{ RaiseError => 1 })
+                       undef,{ RaiseError => 1, PrintError => 0 })
   or die "Unable to connect to DB: ".DBI::errstr;
 
 
@@ -109,17 +109,16 @@ $dbh->begin_work();
 # disable the triggers requested.
 foreach my $trigger_name (@disable_triggers) {
   INFO "disabling trigger $trigger_name";
-  $dbh->do("ALTER TABLE ${schema}.${table} DISABLE TRIGGER $trigger_name")
-    or die $dbh->errstr;
+  $dbh->do("ALTER TABLE ${schema}.${table} DISABLE TRIGGER $trigger_name");
 }
 
 DEBUG "creating cursor";
-$dbh->do("DECLARE dcsr CURSOR FOR $q") or die $dbh->errstr;
+$dbh->do("DECLARE dcsr CURSOR FOR $q");
 
-my $sth = $dbh->prepare("FETCH $batchsize FROM dcsr") or die $dbh->errstr;
+my $sth = $dbh->prepare("FETCH $batchsize FROM dcsr");
 
 INFO "fetching data";
-$sth->execute() or die $dbh->errstr;
+$sth->execute();
 my $left_in_batch = $sth->rows();
 INFO "batch has $left_in_batch rows";
 
@@ -156,9 +155,10 @@ while (my $row = $sth->fetchrow_hashref()) {
       # want to continue and just log the failure.
       try {
         $dbh->do("SAVEPOINT svpt");
-        $dbh->do($query,undef,@update_vals) or die $dbh->errstr;
+        $dbh->do($query,undef,@update_vals);
         $dbh->do("RELEASE SAVEPOINT svpt");
       } catch {
+        # technically we should test if $dbh->err is true
         ERROR "$_";
         say "FAILURE: Unable to update row @primary_keys = $row_key";
         $failed_rows++;
@@ -169,23 +169,22 @@ while (my $row = $sth->fetchrow_hashref()) {
 
   # if we processed all the rows in this batch, get the next batch
   if (--$left_in_batch == 0) {
-    $sth->execute() or die $dbh->errstr;
+    $sth->execute();
     $left_in_batch = $sth->rows();
     INFO "Next batch has $left_in_batch rows";
   }
 } # fetch rows
 
 # need to close else we cannot undo the trigger disables
-$dbh->do("CLOSE dcsr") or die $dbh->errstr;
+$dbh->do("CLOSE dcsr");
 
 # re-enable the triggers requested.
 foreach my $trigger_name (@disable_triggers) {
   INFO "re-enabling trigger $trigger_name";
-  $dbh->do("ALTER TABLE ${schema}.${table} ENABLE TRIGGER $trigger_name")
-    or die $dbh->errstr;
+  $dbh->do("ALTER TABLE ${schema}.${table} ENABLE TRIGGER $trigger_name");
 }
 
-$dbh->commit() or die "commit failed:".$dbh->errstr;
+$dbh->commit();
 LOGEXIT "Done. $examined_rows rows were examined and $fixed_rows rows were corrected with $failed_rows failures to update.";
 
 
@@ -203,13 +202,12 @@ sub find_columns_to_fix {
   my ($s,$t) = @_;
 
   my @columns;
-  my $sth = $dbh->prepare("SELECT column_name,data_type,dtd_identifier FROM information_schema.columns WHERE table_schema=? AND table_name=?")
-    or die $dbh->errstr;
-  $sth->execute($s,$t) or die $dbh->errstr;
+  my $sth = $dbh->prepare("SELECT column_name,data_type,dtd_identifier FROM information_schema.columns WHERE table_schema=? AND table_name=?");
+  $sth->execute($s,$t);
 
   while (my ($col,$dtype,$did) = $sth->fetchrow_array()) {
     if ($dtype eq 'ARRAY') {
-      ($dtype) = $dbh->selectrow_array("SELECT data_type FROM information_schema.element_types WHERE object_schema=? AND object_name=? AND collection_type_identifier=?",undef,$s,$t,$did) or die $dbh->errstr;
+      ($dtype) = $dbh->selectrow_array("SELECT data_type FROM information_schema.element_types WHERE object_schema=? AND object_name=? AND collection_type_identifier=?",undef,$s,$t,$did);
       DEBUG "array type for did=$did is $dtype";
       # we can teach it if we need to... but we don't need to.
       if (type_to_fix($dtype)) { die "unable to handle array of text"; }
