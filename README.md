@@ -77,7 +77,7 @@ Does not perform the UPDATEs but does all other work.
 #### dbuser USER
 
 Name of the user to connect to the DB.  Must be superuser
-or table owner. The $DBUSER environment variable can also be set as
+or table owner. The $PGUSER environment variable can also be set as
 the Postgres library will honor it.
 
 The password comes from the `.pgpass` file or $PGPASSWORD environment
