@@ -2,7 +2,7 @@
 use strict;
 use 5.16.0;
 
-# Time-stamp: "23 October 2015, 15:57:27 (vivek@vk-dev.int.kcilink.com)"
+# Time-stamp: "23 October 2015, 16:26:32 (vivek@vk-dev.int.kcilink.com)"
 
 # scan a table for non-UTF8 data and scrub it into clean UTF8. Ignores
 # columns that are incapable of holding non-UTF8 data such as
@@ -18,6 +18,7 @@ use Encoding::FixLatin qw(fix_latin);
 use DBI;
 use Getopt::Long;
 use Log::Log4perl qw(:easy);
+use Try::Tiny;
 
 my $batchsize = 100;         # how many to fetch from cursor per batch
 
@@ -125,6 +126,7 @@ INFO "batch has $left_in_batch rows";
 
 my $fixed_rows = 0;
 my $examined_rows = 0;
+my $failed_rows = 0;
 while (my $row = $sth->fetchrow_hashref()) {
   my @update_cols;
   my @update_vals;
@@ -150,7 +152,18 @@ while (my $row = $sth->fetchrow_hashref()) {
       local($") = ',';
       my $query = "UPDATE ${schema}.${table} SET @update_cols WHERE ctid=?";
       push @update_vals, $row->{ctid};
-      $dbh->do($query,undef,@update_vals) or die $dbh->errstr;
+      # if the update failed (such as we made a UNIQUE key violation) we
+      # want to continue and just log the failure.
+      try {
+        $dbh->do("SAVEPOINT svpt");
+        $dbh->do($query,undef,@update_vals) or die $dbh->errstr;
+        $dbh->do("RELEASE SAVEPOINT svpt");
+      } catch {
+        ERROR "$_";
+        say "FAILURE: Unable to update row @primary_keys = $row_key";
+        $failed_rows++;
+        $dbh->do("ROLLBACK TO SAVEPOINT svpt");
+      };
     }
   }
 
@@ -173,7 +186,7 @@ foreach my $trigger_name (@disable_triggers) {
 }
 
 $dbh->commit() or die "commit failed:".$dbh->errstr;
-LOGEXIT "Done. $examined_rows rows were examined and $fixed_rows rows were corrected.";
+LOGEXIT "Done. $examined_rows rows were examined and $fixed_rows rows were corrected with $failed_rows failures to update.";
 
 
 # return true if this type is a text type we need to fix UTF8
