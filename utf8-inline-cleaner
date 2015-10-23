@@ -1,0 +1,259 @@
+#!/usr/local/bin/perl
+use strict;
+use 5.16.0;
+
+# Time-stamp: "23 October 2015, 14:19:32 (vivek@vk-dev.int.kcilink.com)"
+
+# scan a table for non-UTF8 data and scrub it into clean UTF8. Ignores
+# columns that are incapable of holding non-UTF8 data such as
+# numerics, date/time, and IP addresses.
+#
+# If the database encoding is not SQL_ASCII there is no guarantee what
+# this program will do. This is not verified by the program.
+#
+# Credentials to connect to the database as a super user need to be set
+# in the $HOME/.pgpass file or the $PGPASSWORD environment variable.
+
+use Encoding::FixLatin qw(fix_latin);
+use DBI;
+use Getopt::Long;
+use Log::Log4perl qw(:easy);
+
+my $batchsize = 100;         # how many to fetch from cursor per batch
+
+# Options:
+#  --debug turns on debugging
+#  --dryrun does not perform the UPDATEs but does all other work.
+#  --dbuser USER name of the user to connect to the DB. The
+#    password comes from the .pgpass file. Must be superuser or table owner
+#  --db DATABASE names the database (required)
+#  --host HOST names the database host; default "localhost"
+#  --schema SCHEMA names the schema being cleaned in the database;
+#    default "public"
+#  --table names the table being cleaned in the schema (required)
+#  --disable TRIGGER disables the named trigger during the fixup step;
+#    specify multiple times for multiple triggers.
+
+# Set up defaults:
+my $dryrun = 0;
+my $debug = 0;
+my $dbuser='';                  # default is whatever system uses
+my $hostname = 'localhost';
+my $database;
+my $schema = 'public';
+my $table;
+my @disable_triggers;
+
+GetOptions(
+  "debug" => \$debug,
+  "dryrun" => \$dryrun,
+  "dbuser=s" => \$dbuser,
+  "db=s" => \$database,
+  "host=s" => \$hostname,
+  "schema=s" => \$schema,
+  "table=s" => \$table,
+  "disable=s" => \@disable_triggers,
+);
+
+if ($debug) {
+  Log::Log4perl->easy_init($DEBUG);
+} else {
+  Log::Log4perl->easy_init($INFO);
+}
+
+die("db not specified") unless defined $database;
+die("table not specified") unless defined $table;
+
+DEBUG "user=$dbuser db=${hostname}:${database} schema=$schema table=$table disable=(@disable_triggers)";
+
+# connect to the database
+my $dbh = DBI->connect("dbi:Pg:dbname=${database};host=${hostname}", $dbuser,
+                       undef,{ RaiseError => 1 })
+  or die "Unable to connect to DB: ".DBI::errstr;
+
+
+# introspect the database and find the columns of interest in the given table
+my @fixcols = find_columns_to_fix($schema,$table);
+
+if (@fixcols == 0) {
+  LOGEXIT "No candidate columns to repair.";
+}
+
+# verify that the named triggers exist
+if (!find_all_triggers($schema,$table,@disable_triggers)) {
+  die "unable to find specified triggers";
+}
+
+# fetch the primary key columns. If none bail and find some
+# other way to fix this up.
+my @primary_keys = find_primary_keys($schema,$table,@fixcols);
+die "no primary keys found" unless @primary_keys;
+DEBUG "pk = @primary_keys";
+
+#
+# up to here was all just introspecting the DB, now we fix the table.
+#
+
+# sanity checks done, now set up our query to fetch the data for rows that
+# have non-ASCII bytes in them.
+
+# make query to search for rows that have any non-ASCII bytes in them
+my $q = "SELECT ctid,".join(',',@primary_keys).",".join(',',@fixcols)." FROM ONLY ${schema}.${table} WHERE ";
+$q .= join(' OR ', map { "${_}::text ~ E'[\\x7f-\\xff]'" } @fixcols);
+$q .= " FOR UPDATE";
+DEBUG $q;
+
+$dbh->begin_work();
+
+# disable the triggers requested.
+foreach my $trigger_name (@disable_triggers) {
+  INFO "disabling trigger $trigger_name";
+  $dbh->do("ALTER TABLE ${schema}.${table} DISABLE TRIGGER $trigger_name")
+    or die $dbh->errstr;
+}
+
+DEBUG "creating cursor";
+$dbh->do("DECLARE dcsr CURSOR FOR $q") or die $dbh->errstr;
+
+my $sth = $dbh->prepare("FETCH $batchsize FROM dcsr") or die $dbh->errstr;
+
+INFO "fetching data";
+$sth->execute() or die $dbh->errstr;
+my $left_in_batch = $sth->rows();
+INFO "batch has $left_in_batch rows";
+
+while (my $row = $sth->fetchrow_hashref()) {
+  my @update_cols;
+  my @update_vals;
+  my $row_key = join(',',map { $row->{$_} } @primary_keys);
+
+  # check to see which columns need upgrading to utf8
+  DEBUG "Examining row @primary_keys = $row_key";
+  foreach my $colname (@fixcols) {
+    next unless defined $row->{$colname}; # skip NULLs
+    my $fixed = fix_latin($row->{$colname}, bytes_only => 1);
+    if ($row->{$colname} ne $fixed) {
+      say "fixing $colname from $row->{$colname} to $fixed for @primary_keys = $row_key";
+      push @update_cols, "$colname=?";
+      push @update_vals, $fixed;
+    }
+  }
+
+  # do the update if we're not in a dry run test.
+  if (!$dryrun && scalar(@update_cols) > 0) {
+    local($") = ',';
+    my $query = "UPDATE ${schema}.${table} SET @update_cols WHERE ctid=?";
+    push @update_vals, $row->{ctid};
+    $dbh->do($query,undef,@update_vals) or die $dbh->errstr;
+  }
+
+  # if we processed all the rows in this batch, get the next batch
+  if (--$left_in_batch == 0) {
+    $sth->execute() or die $dbh->errstr;
+    $left_in_batch = $sth->rows();
+    INFO "Next batch has $left_in_batch rows";
+  }
+} # fetch rows
+
+# need to close else we cannot undo the trigger disables
+$dbh->do("CLOSE dcsr") or die $dbh->errstr;
+
+# re-enable the triggers requested.
+foreach my $trigger_name (@disable_triggers) {
+  INFO "re-enabling trigger $trigger_name";
+  $dbh->do("ALTER TABLE ${schema}.${table} ENABLE TRIGGER $trigger_name")
+    or die $dbh->errstr;
+}
+
+$dbh->commit() or die "commit failed:".$dbh->errstr;
+LOGEXIT "Done";
+
+
+# return true if this type is a text type we need to fix UTF8
+# currently only text, character, character varying, and JSON types
+sub type_to_fix {
+  my $datatype = shift;
+
+  return ($datatype =~ m/^(char|text|json)/);
+}
+
+# introspect the database and find the columns of interest in the given table
+# INPUT: schema and table names.
+sub find_columns_to_fix {
+  my ($s,$t) = @_;
+
+  my @columns;
+  my $sth = $dbh->prepare("SELECT column_name,data_type,dtd_identifier FROM information_schema.columns WHERE table_schema=? AND table_name=?")
+    or die $dbh->errstr;
+  $sth->execute($s,$t) or die $dbh->errstr;
+
+  while (my ($col,$dtype,$did) = $sth->fetchrow_array()) {
+    if ($dtype eq 'ARRAY') {
+      ($dtype) = $dbh->selectrow_array("SELECT data_type FROM information_schema.element_types WHERE object_schema=? AND object_name=? AND collection_type_identifier=?",undef,$s,$t,$did) or die $dbh->errstr;
+      DEBUG "array type for did=$did is $dtype";
+      # we can teach it if we need to... but we don't need to.
+      if (type_to_fix($dtype)) { die "unable to handle array of text"; }
+    }
+
+    if (type_to_fix($dtype)) {
+      DEBUG "Fixing $col of type $dtype";
+      push @columns, $col;
+    }
+  }
+
+  return @columns;
+}
+
+# verify that the named triggers exist
+# INPUT: schema, table, list of trigger names
+# OUTPUT: true if all found, false if not all found.
+sub find_all_triggers {
+  my ($s,$t,@triggers) = @_;
+
+  foreach my $trigger_name (@triggers) {
+    DEBUG "looking for trigger $trigger_name";
+    my ($exists) = $dbh->selectrow_array("SELECT 1 FROM information_schema.triggers WHERE trigger_name=? AND event_object_schema=? and event_object_table=?",undef,$trigger_name,$s,$t);
+    unless ($exists) {
+      FATAL "unable to find trigger $trigger_name";
+      return 0;
+    }
+  }
+  return 1;
+}
+
+
+# fetch the primary key columns. dies if PK found in column list.
+# INPUT: schema, table, column list
+# OUTPUT: list of primary key column names
+sub find_primary_keys {
+  my ($s,$t,@cols) = @_;
+
+  my @pklist;
+
+  my $primary_key_list = $dbh->selectall_arrayref("SELECT kc.column_name FROM information_schema.table_constraints tc JOIN information_schema.key_column_usage kc ON kc.table_name = tc.table_name AND kc.table_schema = tc.table_schema AND kc.constraint_name=tc.constraint_name WHERE tc.constraint_type = 'PRIMARY KEY' AND tc.table_name=? and tc.table_schema=?",undef,$t,$s);
+
+  # iterate over the PK list and make an array of the key names and
+  # ensure that none are part of the list of fields to update. we are not
+  # dealing with updating PK values.
+  if ($primary_key_list) {
+    foreach my $pk_row (@{$primary_key_list}) {
+      my $pk = $pk_row->[0];
+      if (grep /$pk/,@cols) {
+        die "primary key field $pk is in list of fields to fix: cannot continue";
+      }
+      push @pklist, $pk;
+    }
+  } else {
+    die "cannot find table primary keys";
+  }
+  return @pklist;
+}
+
+=pod
+
+=head1 COPYRIGHT
+
+This program is Copyright 2015 MailerMailer LLC. It is licensed under
+the same terms as Perl itself.
+
+=cut
