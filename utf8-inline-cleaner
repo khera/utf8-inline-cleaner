@@ -2,7 +2,7 @@
 use strict;
 use 5.16.0;
 
-# Time-stamp: "23 October 2015, 17:37:43 (vivek@vk-dev.int.kcilink.com)"
+# Time-stamp: "27 October 2015, 09:35:08 (vivek@vk-dev.int.kcilink.com)"
 
 # scan a table for non-UTF8 data and scrub it into clean UTF8. Ignores
 # columns that are incapable of holding non-UTF8 data such as
@@ -65,7 +65,7 @@ if ($debug) {
 die("db not specified") unless defined $database;
 die("table not specified") unless defined $table;
 
-DEBUG "user=$dbuser db=${hostname}:${database} schema=$schema table=$table disable=(@disable_triggers)";
+INFO "user=$dbuser db=${hostname}:${database} schema=$schema table=$table disable=(@disable_triggers)";
 
 # connect to the database
 my $dbh = DBI->connect("dbi:Pg:dbname=${database};host=${hostname}", $dbuser,
@@ -185,7 +185,7 @@ foreach my $trigger_name (@disable_triggers) {
 }
 
 $dbh->commit();
-LOGEXIT "Done. $examined_rows rows were examined and $fixed_rows rows were corrected with $failed_rows failures to update.";
+LOGEXIT "Done ${table}. $examined_rows rows were examined and $fixed_rows rows were corrected with $failed_rows failures to update.";
 
 
 # return true if this type is a text type we need to fix UTF8
