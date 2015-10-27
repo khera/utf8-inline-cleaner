@@ -2,7 +2,7 @@
 use strict;
 use 5.16.0;
 
-# Time-stamp: "27 October 2015, 09:35:08 (vivek@vk-dev.int.kcilink.com)"
+# Time-stamp: "27 October 2015, 10:00:28 (vivek@vk-dev.int.kcilink.com)"
 
 # scan a table for non-UTF8 data and scrub it into clean UTF8. Ignores
 # columns that are incapable of holding non-UTF8 data such as
@@ -101,7 +101,7 @@ DEBUG "pk = @primary_keys";
 # make query to search for rows that have any non-ASCII bytes in them
 my $q = "SELECT ctid,".join(',',@primary_keys).",".join(',',@fixcols)." FROM ONLY ${schema}.${table} WHERE ";
 $q .= join(' OR ', map { "${_}::text ~ E'[\\x7f-\\xff]'" } @fixcols);
-$q .= " FOR UPDATE";
+$q .= " FOR UPDATE" unless $dryrun; # don't lock if just scanning
 DEBUG $q;
 
 $dbh->begin_work();
@@ -138,7 +138,7 @@ while (my $row = $sth->fetchrow_hashref()) {
     next unless defined $row->{$colname}; # skip NULLs
     my $fixed = fix_latin($row->{$colname}, bytes_only => 1);
     if ($row->{$colname} ne $fixed) {
-      say "fixing $colname from $row->{$colname} to $fixed for @primary_keys = $row_key";
+      say "fixing $colname from $row->{$colname} **TO** $fixed for @primary_keys = $row_key";
       push @update_cols, "$colname=?";
       push @update_vals, $fixed;
     }
