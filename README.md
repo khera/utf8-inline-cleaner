@@ -46,6 +46,9 @@ function thinks it is valid because it does not actually check the
 code pages for valid characters. Postgres, however, does not like that
 byte sequence since it is an undefined character.
 
+Errors related to invalid code points found in the data will be
+reported as transcoding failures (search for FAILURE: in the output).
+
 
 ## Installing
 

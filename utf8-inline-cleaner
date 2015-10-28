@@ -2,7 +2,7 @@
 use strict;
 use 5.16.0;
 
-# Time-stamp: "27 October 2015, 10:11:38 (vivek@vk-dev.int.kcilink.com)"
+# Time-stamp: "28 October 2015, 11:16:47 (vivek@vk-dev.int.kcilink.com)"
 
 # scan a table for non-UTF8 data and scrub it into clean UTF8. Ignores
 # columns that are incapable of holding non-UTF8 data such as
@@ -15,6 +15,7 @@ use 5.16.0;
 # in the $HOME/.pgpass file or the $PGPASSWORD environment variable.
 
 use Encoding::FixLatin qw(fix_latin);
+use Encode;
 use DBI;
 use Getopt::Long;
 use Log::Log4perl qw(:easy);
@@ -125,7 +126,7 @@ INFO "batch has $left_in_batch rows";
 
 my $fixed_rows = 0;
 my $examined_rows = 0;
-my $failed_rows = 0;
+my $conversion_failures = 0;
 while (my $row = $sth->fetchrow_hashref()) {
   my @update_cols;
   my @update_vals;
@@ -137,6 +138,15 @@ while (my $row = $sth->fetchrow_hashref()) {
   foreach my $colname (@fixcols) {
     next unless defined $row->{$colname}; # skip NULLs
     my $fixed = fix_latin($row->{$colname}, bytes_only => 1);
+    # now make sure the value has only valid characters (sometimes fix_latin
+    # misses bad sequences because it works on patterns).
+    try {
+      decode('utf-8-strict',$fixed,Encode::FB_CROAK);
+    } catch {
+      say "FAILURE: Invalid UTF-8 found in column $colname for row @primary_keys = $row_key must be manually fixed: $_";
+      $conversion_failures++;
+    };
+
     if ($row->{$colname} ne $fixed) {
       say "fixing $colname from $row->{$colname} **TO** $fixed for @primary_keys = $row_key";
       push @update_cols, "$colname=?";
@@ -160,8 +170,8 @@ while (my $row = $sth->fetchrow_hashref()) {
       } catch {
         # technically we should test if $dbh->err is true
         ERROR "$_";
-        say "FAILURE: Unable to update row @primary_keys = $row_key";
-        $failed_rows++;
+        say "FAILURE: Unable to update row @primary_keys = $row_key: $_";
+        $conversion_failures++;
         $dbh->do("ROLLBACK TO SAVEPOINT svpt");
       };
     }
@@ -185,7 +195,7 @@ foreach my $trigger_name (@disable_triggers) {
 }
 
 $dbh->commit();
-LOGEXIT "Done ${table}: $examined_rows rows were examined and $fixed_rows rows were corrected with $failed_rows failures to update.";
+LOGEXIT "Done ${table}: $examined_rows rows were examined and $fixed_rows rows were corrected with $conversion_failures failures.";
 
 
 # return true if this type is a text type we need to fix UTF8
