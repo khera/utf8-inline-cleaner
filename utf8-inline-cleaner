@@ -2,7 +2,7 @@
 use strict;
 use 5.16.0;
 
-# Time-stamp: "27 October 2015, 10:00:28 (vivek@vk-dev.int.kcilink.com)"
+# Time-stamp: "27 October 2015, 10:11:38 (vivek@vk-dev.int.kcilink.com)"
 
 # scan a table for non-UTF8 data and scrub it into clean UTF8. Ignores
 # columns that are incapable of holding non-UTF8 data such as
@@ -185,7 +185,7 @@ foreach my $trigger_name (@disable_triggers) {
 }
 
 $dbh->commit();
-LOGEXIT "Done ${table}. $examined_rows rows were examined and $fixed_rows rows were corrected with $failed_rows failures to update.";
+LOGEXIT "Done ${table}: $examined_rows rows were examined and $fixed_rows rows were corrected with $failed_rows failures to update.";
 
 
 # return true if this type is a text type we need to fix UTF8

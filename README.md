@@ -30,11 +30,21 @@ file.
 
 The other major assumption is that the database is using the `SQL_ASCII`
 encoding (*i.e.*, no encoding). If your database is any other encoding,
-all bets are off.
+all bets are off, and you can likely use the built-in tools to export
+the data as UTF-8.
+
+### Accuracy
 
 The fix_latin function is pretty good at guessing what character set
 was intended, but it is still just guessing. It will get it wrong for
 some data.
+
+One specific flaw we encountered is the UTF-8 code point 0xed 0xa0
+0x8d which maps to UNICODE code point 0xd80d. This *looks* like a
+proper character but in fact is not a valid character. The fix_latin
+function thinks it is valid because it does not actually check the
+code pages for valid characters. Postgres, however, does not like that
+byte sequence since it is an undefined character.
 
 
 ## Installing
@@ -64,6 +74,30 @@ Example:
 ```
 ./utf8-inline-cleaner --dryrun --db utf8test --dbuser postgres --table templates --disable trig_templates_log_update
 ```
+
+The `--dryrun` flag can be used to inventory your database to find
+which tables actually need transcoding. Direct the stdout to
+*/dev/null* and look at the summary line. If it says no rows were
+updated, that table is already UTF-8 clean. Do not specify any
+triggers to disable with this use case to avoid any table or row
+locking.
+
+On occasion, a transcoded row may cause a unique key violation if
+there is another key already in UTF-8 for that same value. In this
+case, an error will be printed indicating the primary key of the row
+that was not able to be updated (search for "FAILURE:" in the
+output). The summary line will display how many such rows there
+were.
+
+After all the tables are transcoded, dump the database with UTF-8
+encoding:
+
+```
+pg_dump -v -U postgres -j8 -Fd -f utf8test.d --encoding=UTF8 utf8test
+```
+
+Any existing encoding problems will be detected by PostgreSQL at this
+time and should be corrected by hand.
 
 ### Command Line Flags
 
