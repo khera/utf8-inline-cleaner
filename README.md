@@ -148,6 +148,24 @@ effects from the updates that are about to be issued, do not bother
 disabling them. When triggers are disabled, the whole table is locked
 so there can be no concurrency.
 
+## Test Data
+
+The file `utf8test.sql` is included for testing. Load it into an
+SQL_ASCII database:
+
+```
+createdb -U postgres -E SQL_ASCII -T template0 utf8test
+psql -f utf8test.sql utf8test
+./utf8-inline-cleaner --dryrun --db utf8test --table t1
+```
+
+The expectation is that row 1 will have invalid UTF8 that needs to be
+fixed by hand, row 2 will fix the text column (for NFC change) but
+leave the json column alone as it is already proper UTF8 NFC octets,
+and row 4 will fix the json column for NFC change and the text column
+for ISO-8859-1 to UTF8 change of the "Small y, dieresis" character.
+Row 3 is left alone (not even examined).
+
 # Sponsor
 
 This code has been developed under sponsorship of MailerMailer
