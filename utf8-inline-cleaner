@@ -2,7 +2,7 @@
 use strict;
 use 5.16.0;
 
-# Time-stamp: "28 October 2015, 11:16:47 (vivek@vk-dev.int.kcilink.com)"
+# Time-stamp: "04 November 2015, 16:02:21 (vivek@vk-dev.int.kcilink.com)"
 
 # scan a table for non-UTF8 data and scrub it into clean UTF8. Ignores
 # columns that are incapable of holding non-UTF8 data such as
@@ -20,6 +20,7 @@ use DBI;
 use Getopt::Long;
 use Log::Log4perl qw(:easy);
 use Try::Tiny;
+use Unicode::Normalize qw(NFC);
 
 my $batchsize = 100;         # how many to fetch from cursor per batch
 
@@ -123,7 +124,6 @@ $sth->execute();
 my $left_in_batch = $sth->rows();
 INFO "batch has $left_in_batch rows";
 
-
 my $fixed_rows = 0;
 my $examined_rows = 0;
 my $conversion_failures = 0;
@@ -137,11 +137,12 @@ while (my $row = $sth->fetchrow_hashref()) {
   $examined_rows++;
   foreach my $colname (@fixcols) {
     next unless defined $row->{$colname}; # skip NULLs
-    my $fixed = fix_latin($row->{$colname}, bytes_only => 1);
+    my $fixed = NFC(fix_latin($row->{$colname}));
+    utf8::encode($fixed);       # operate on octets from here on out.
     # now make sure the value has only valid characters (sometimes fix_latin
     # misses bad sequences because it works on patterns).
     try {
-      decode('utf-8-strict',$fixed,Encode::FB_CROAK);
+      decode('utf-8-strict',$fixed,Encode::FB_CROAK|Encode::LEAVE_SRC);
     } catch {
       say "FAILURE: Invalid UTF-8 found in column $colname for row @primary_keys = $row_key must be manually fixed: $_";
       $conversion_failures++;
