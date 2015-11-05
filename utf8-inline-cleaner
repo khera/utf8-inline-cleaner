@@ -2,7 +2,7 @@
 use strict;
 use 5.16.0;
 
-# Time-stamp: "04 November 2015, 16:02:21 (vivek@vk-dev.int.kcilink.com)"
+# Time-stamp: "05 November 2015, 12:08:05 (vivek@vk-dev.int.kcilink.com)"
 
 # scan a table for non-UTF8 data and scrub it into clean UTF8. Ignores
 # columns that are incapable of holding non-UTF8 data such as
@@ -102,7 +102,7 @@ DEBUG "pk = @primary_keys";
 
 # make query to search for rows that have any non-ASCII bytes in them
 my $q = "SELECT ctid,".join(',',@primary_keys).",".join(',',@fixcols)." FROM ONLY ${schema}.${table} WHERE ";
-$q .= join(' OR ', map { "${_}::text ~ E'[\\x7f-\\xff]'" } @fixcols);
+$q .= join(' OR ', map { "${_}::text ~ E'[\\x80-\\xff]'" } @fixcols);
 $q .= " FOR UPDATE" unless $dryrun; # don't lock if just scanning
 DEBUG $q;
 
