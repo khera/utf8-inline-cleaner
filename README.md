@@ -11,7 +11,7 @@ The strategy is to search the table for any text-based columns (char,
 varchar, text, JSON, etc.) which contain non-ASCII bytes. Those rows
 are selected "FOR UPDATE" to prevent any changes while we inspect them
 further. Next, each column is run through the
-Encoding::FixLatin::fix_latin function. If the result is different
+`Encoding::FixLatin::fix_latin` function. If the result is different
 than what we started with, the new value is updated for that column.
 
 The goal is to end up with data that is all UTF-8 clean, and can then
@@ -35,18 +35,32 @@ the data as UTF-8.
 
 ### Accuracy
 
-The fix_latin function is pretty good at guessing what character set
+The `fix_latin` function is pretty good at guessing what character set
 was intended, but it is still just guessing. It will get it wrong for
 some data.
 
 One specific flaw we encountered is the UTF-8 code point 0xed 0xa0
 0x8d which maps to UNICODE code point 0xd80d. This *looks* like a
-proper character but in fact is not a valid character. The fix_latin
+proper character but in fact is not a valid character. The `fix_latin`
 function thinks it is valid because it does not actually check the
 code pages for valid characters. Postgres, however, does not like that
 byte sequence since it is an undefined character.
 
-Errors related to invalid code points found in the data will be
+If you are not a fan of the `fix_latin` function, or if some of the
+transcoding it does breaks your data, it can be replaced with
+something along the lines of this:
+
+```
+sub fix_latin {
+ my $octets = shift;
+ return decode('utf-8-strict',$octets,sub { my $t = chr shift; from_to $t, 'windows-1252', 'UTF-8'; $t; });
+}
+```
+
+This code will attempt to decode the octets as strict utf-8, and upon
+failure interpret them as Windows-1252 (which is a superset of iso8859-1).
+
+Unfixable errors related to invalid code points found in the data will be
 reported as transcoding failures (search for FAILURE: in the output).
 
 
@@ -100,7 +114,9 @@ pg_dump -v -U postgres -j8 -Fd -f utf8test.d --encoding=UTF8 utf8test
 ```
 
 Any existing encoding problems will be detected by PostgreSQL at this
-time and should be corrected by hand.
+time and should be corrected by hand. There should be none, as we did
+the strict UTF-8 test; if there are, please file a bug including the
+source data that was improperly converted.
 
 ### Command Line Flags
 
